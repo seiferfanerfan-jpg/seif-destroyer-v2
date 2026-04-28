@@ -17,15 +17,23 @@ let data = {
 };
 
 function loadData() {
-    if (fs.existsSync(DATA_FILE)) {
-        data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-    } else {
-        saveData();
+    try {
+        if (fs.existsSync(DATA_FILE)) {
+            data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
+        } else {
+            saveData();
+        }
+    } catch (e) {
+        console.log("Error loading data, using defaults.");
     }
 }
 
 function saveData() {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 4));
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 4));
+    } catch (e) {
+        console.log("Error saving data.");
+    }
 }
 
 const DESTRUCTION_MESSAGES = [
@@ -52,6 +60,7 @@ const DESTRUCTION_MESSAGES = [
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState("auth_info");
+    
     const sock = makeWASocket({
         logger: pino({ level: "silent" }),
         printQRInTerminal: false,
@@ -76,99 +85,106 @@ async function connectToWhatsApp() {
     sock.ev.on("creds.update", saveCreds);
 
     sock.ev.on("messages.upsert", async (m) => {
-        const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        try {
+            const msg = m.messages[0];
+            if (!msg.message || msg.key.fromMe) return;
 
-        const sender = msg.key.remoteJid;
-        const senderNumber = sender.split("@")[0];
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-        
-        // التحقق من المدير
-        const isAdmin = senderNumber === ADMIN_NUMBER;
+            const sender = msg.key.remoteJid;
+            const senderNumber = sender.split("@")[0];
+            const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+            
+            const isAdmin = senderNumber === ADMIN_NUMBER;
 
-        if (isAdmin) {
-            if (text.toLowerCase() === "start" || text === "SEIF" || text === "مدير") {
-                const menu = "أهلاً ي زعيم 🫡\n\n1️⃣ - الإحصائيات\n2️⃣ - تدمير [الرقم]\n3️⃣ - حظر بلاغات [الرقم]\n4️⃣ - قصف سريع [الرقم] [العدد] [النص]";
-                await sock.sendMessage(sender, { text: menu });
+            if (isAdmin) {
+                if (text.toLowerCase() === "start" || text === "SEIF" || text === "مدير") {
+                    const menu = "أهلاً ي زعيم 🫡\n\n1️⃣ - الإحصائيات\n2️⃣ - تدمير [الرقم]\n3️⃣ - حظر بلاغات [الرقم]\n4️⃣ - قصف سريع [الرقم] [العدد] [النص]";
+                    await sock.sendMessage(sender, { text: menu });
+                    return;
+                }
+
+                if (text === "1") {
+                    await sock.sendMessage(sender, { text: `📊 القذائف المرسلة: ${data.total_messages_sent}` });
+                } else if (text.startsWith("2 ") || text.startsWith("تدمير ")) {
+                    const targetNum = text.split(" ")[1];
+                    const target = targetNum + "@s.whatsapp.net";
+                    await sock.sendMessage(sender, { text: "😈 جاري التدمير الشامل..." });
+                    for (const m of DESTRUCTION_MESSAGES) {
+                        await sock.sendMessage(target, { text: `🔥 ${m} 🔥` });
+                        data.total_messages_sent++;
+                        await new Promise(r => setTimeout(r, 100));
+                    }
+                    saveData();
+                    await sock.sendMessage(sender, { text: "✅ تم السحق بنجاح!" });
+                } else if (text.startsWith("3 ") || text.startsWith("حظر ")) {
+                    const targetNum = text.split(" ")[1];
+                    const target = targetNum + "@s.whatsapp.net";
+                    await sock.sendMessage(sender, { text: "⚔️ جاري شن هجوم البلاغات..." });
+                    for (let i = 1; i <= 100; i++) {
+                        await sock.sendMessage(target, { text: `🔥 بلاغ تدميري رقم ${i} من جحيم SEIF 🔥` });
+                        data.total_messages_sent++;
+                        if (i % 20 === 0) await sock.sendMessage(sender, { text: `✅ تم إرسال ${i} بلاغ...` });
+                        await new Promise(r => setTimeout(r, 50));
+                    }
+                    saveData();
+                    await sock.sendMessage(sender, { text: "✅ تم الانتهاء!" });
+                } else if (text.startsWith("4 ")) {
+                    const parts = text.split(" ");
+                    const target = parts[1] + "@s.whatsapp.net";
+                    const count = parseInt(parts[2]);
+                    const content = parts.slice(3).join(" ");
+                    await sock.sendMessage(sender, { text: `🚀 جاري القصف السريع (${count}) مرات...` });
+                    for (let i = 0; i < count; i++) {
+                        await sock.sendMessage(target, { text: content });
+                        data.total_messages_sent++;
+                        await new Promise(r => setTimeout(r, 50));
+                    }
+                    saveData();
+                    await sock.sendMessage(sender, { text: "✅ تم القصف!" });
+                }
                 return;
             }
 
-            if (text === "1") {
-                await sock.sendMessage(sender, { text: `📊 القذائف المرسلة: ${data.total_messages_sent}` });
-            } else if (text.startsWith("2 ") || text.startsWith("تدمير ")) {
-                const target = text.split(" ")[1] + "@s.whatsapp.net";
-                await sock.sendMessage(sender, { text: "😈 جاري التدمير الشامل..." });
-                for (const m of DESTRUCTION_MESSAGES) {
-                    await sock.sendMessage(target, { text: `🔥 ${m} 🔥` });
-                    data.total_messages_sent++;
-                    await new Promise(r => setTimeout(r, 100));
-                }
-                saveData();
-                await sock.sendMessage(sender, { text: "✅ تم السحق بنجاح!" });
-            } else if (text.startsWith("3 ") || text.startsWith("حظر ")) {
-                const target = text.split(" ")[1] + "@s.whatsapp.net";
-                await sock.sendMessage(sender, { text: "⚔️ جاري شن هجوم البلاغات..." });
-                for (let i = 1; i <= 100; i++) {
-                    await sock.sendMessage(target, { text: `🔥 بلاغ تدميري رقم ${i} من جحيم SEIF 🔥` });
-                    data.total_messages_sent++;
-                    if (i % 20 === 0) await sock.sendMessage(sender, { text: `✅ تم إرسال ${i} بلاغ...` });
-                    await new Promise(r => setTimeout(r, 50));
-                }
-                saveData();
-                await sock.sendMessage(sender, { text: "✅ تم الانتهاء!" });
-            } else if (text.startsWith("4 ")) {
-                const parts = text.split(" ");
-                const target = parts[1] + "@s.whatsapp.net";
-                const count = parseInt(parts[2]);
-                const content = parts.slice(3).join(" ");
-                await sock.sendMessage(sender, { text: `🚀 جاري القصف السريع (${count}) مرات...` });
-                for (let i = 0; i < count; i++) {
-                    await sock.sendMessage(target, { text: content });
-                    data.total_messages_sent++;
-                    await new Promise(r => setTimeout(r, 50));
-                }
-                saveData();
-                await sock.sendMessage(sender, { text: "✅ تم القصف!" });
+            if (text.toLowerCase() === "start") {
+                await sock.sendMessage(sender, { text: "⚠️ أدخل كلمة المرور للإكمال:" });
+                return;
             }
-            return;
-        }
 
-        // أوامر المستخدمين العاديين
-        if (text.toLowerCase() === "start") {
-            await sock.sendMessage(sender, { text: "⚠️ أدخل كلمة المرور للإكمال:" });
-            return;
-        }
-
-        if (text === PASSWORD) {
-            data.users[senderNumber] = { authenticated: true };
-            saveData();
-            await sock.sendMessage(sender, { text: "🔓 تم التحقق!\n\n1️⃣ - تدمير [الرقم]\n2️⃣ - حظر بلاغات [الرقم]" });
-            return;
-        }
-
-        if (data.users[senderNumber]?.authenticated) {
-            if (text.startsWith("1 ")) {
-                const target = text.split(" ")[1] + "@s.whatsapp.net";
-                await sock.sendMessage(sender, { text: "😈 جاري التدمير..." });
-                for (const m of DESTRUCTION_MESSAGES) {
-                    await sock.sendMessage(target, { text: `🔥 ${m} 🔥` });
-                    data.total_messages_sent++;
-                    await new Promise(r => setTimeout(r, 200));
-                }
+            if (text === PASSWORD) {
+                if (!data.users[senderNumber]) data.users[senderNumber] = {};
+                data.users[senderNumber].authenticated = true;
                 saveData();
-            } else if (text.startsWith("2 ")) {
-                const target = text.split(" ")[1] + "@s.whatsapp.net";
-                await sock.sendMessage(sender, { text: "⚔️ جاري إرسال البلاغات..." });
-                for (let i = 1; i <= 50; i++) {
-                    await sock.sendMessage(target, { text: `🔥 بلاغ رقم ${i} 🔥` });
-                    data.total_messages_sent++;
-                    await new Promise(r => setTimeout(r, 100));
-                }
-                saveData();
+                await sock.sendMessage(sender, { text: "🔓 تم التحقق!\n\n1️⃣ - تدمير [الرقم]\n2️⃣ - حظر بلاغات [الرقم]" });
+                return;
             }
+
+            if (data.users[senderNumber]?.authenticated) {
+                if (text.startsWith("1 ")) {
+                    const targetNum = text.split(" ")[1];
+                    const target = targetNum + "@s.whatsapp.net";
+                    await sock.sendMessage(sender, { text: "😈 جاري التدمير..." });
+                    for (const m of DESTRUCTION_MESSAGES) {
+                        await sock.sendMessage(target, { text: `🔥 ${m} 🔥` });
+                        data.total_messages_sent++;
+                        await new Promise(r => setTimeout(r, 200));
+                    }
+                    saveData();
+                } else if (text.startsWith("2 ")) {
+                    const targetNum = text.split(" ")[1];
+                    const target = targetNum + "@s.whatsapp.net";
+                    await sock.sendMessage(sender, { text: "⚔️ جاري إرسال البلاغات..." });
+                    for (let i = 1; i <= 50; i++) {
+                        await sock.sendMessage(target, { text: `🔥 بلاغ رقم ${i} 🔥` });
+                        data.total_messages_sent++;
+                        await new Promise(r => setTimeout(r, 100));
+                    }
+                    saveData();
+                }
+            }
+        } catch (err) {
+            console.log("Error handling message: ", err);
         }
     });
 }
 
 loadData();
-connectToWhatsApp();
+connectToWhatsApp().catch(err => console.log("Connection Error: ", err));
